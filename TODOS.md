@@ -35,6 +35,16 @@ post-v1 / out-of-scope-for-now.
 - **Cons:** More gate plumbing; not all needed for the first loop.
 - **Context:** v1 = apply-gate only. Add as the lifecycle grows.
 
+## Security requirements (CSO threat model 2026-06-09)
+Design-stage findings; full detail in `docs/ARCHITECTURE_AND_DESIGN.md` §8.5. Build-blocking.
+- **[P1] SR1 — Blueprint authz:** admin-curated catalog only; users never supply OpenTofu; allowlisted pinned module refs; editing is admin-gated + audited. (Cloud-RCE risk.)
+- **[P1] SR2 — Denial-of-wallet:** per-user/org aggregate budget + request rate limit + concurrent-sandbox cap, fail-closed. (Per-sandbox cap doesn't bound aggregate spend.)
+- **[P2] SR3 — Tamper-evident audit:** hash-chain events and/or WORM/object-lock mirror.
+- **[P2] SR4 — Split control-plane identities:** vending vs provisioning; tight OIDC subject/audience (no wildcards); resolve in week-0 spike.
+- **[P2] SR5 — No default creds outside dev profile;** force admin password on first real boot.
+- **[P2] SR6 — Sign runner image:** SHA-pin actions, cosign/SLSA provenance, restrict tag-push, scope CI OIDC.
+- **[P2] SR7 — Explicit authz on destroy/extend** (owner-or-admin only, audited).
+
 ## Open-core line + positioning — RESOLVED (CEO review 2026-06-08)
 Decided. See the design doc's "Strategy Decisions" section.
 - **License:** AGPL-3.0 + commercial dual-license. **Requires a CLA from day one.**

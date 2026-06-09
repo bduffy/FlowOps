@@ -90,18 +90,21 @@ data model, failure modes, and the test strategy — is in
 > (credentials + an isolation strategy) — it cannot be zero-config.
 
 ```bash
-# 1. Run the control plane (app, board, gates) locally
-docker compose up
+# 1. Run the full control plane in DEV MODE (no cloud credentials needed)
+FLOWOPS_PROFILE=dev docker compose up
 
 # 2. Open the board
 open http://localhost:5173
 
-# 3. Wire a cloud (guided) to enable real provisioning
-#    -> see docs/ (cloud setup guide, coming with the first release)
+# 3. When ready for real provisioning, switch to the cloud profile + wire a cloud
+#    FLOWOPS_PROFILE=cloud  (guided cloud setup -> see docs/, coming with the first release)
 ```
 
-Until your cloud is wired, FlowOps runs against the **DummyActuator** so you can drive
-the full request → gate → status → teardown loop with no cloud credentials.
+**Dev mode** (`FLOWOPS_PROFILE=dev`) runs the entire loop — request, both gates, the job
+state machine, TTL teardown, and the audit trail — on your laptop with **zero cloud
+credentials and zero cloud spend**, using a simulated actuator. The budget gate is
+advisory and clearly labeled "dev — not enforced." Everything above the actuator is
+identical to the cloud profile, so what you build in dev mode is what runs in production.
 
 ## Tech stack
 

@@ -89,7 +89,8 @@ The minimal loop that proves the thesis:
 
 `request → task → action`, with one blueprint (**dev sandbox**), one gate set (approval
 + cloud-enforced budget), one real actuator (OpenTofu in a container job), TTL teardown,
-and an append-only audit trail.
+and an append-only audit trail. Plus a **dev (local) execution profile** that runs the
+entire loop on a laptop with zero cloud credentials (see §4.7).
 
 ### 3.2 Explicitly NOT in scope (v1)
 
@@ -101,6 +102,8 @@ and an append-only audit trail.
 | Live cost estimation (Infracost) | Cloud-enforced budget replaces it for v1. |
 | Warm pool of pre-vended accounts | Perf optimization for when on-demand vending latency hurts. |
 | Multi-tenancy, SSO, hosted runners | Commercial / open-core layer, post-v1. |
+| LocalStack dev path (real OpenTofu vs emulated AWS) | Fast-follow to dev mode; v1 dev mode is Dummy-only (§4.7). |
+| `local-docker` blueprint (usable local sandbox) | Fast-follow; lets dev mode build a real local container, not just a simulated handle. |
 
 ### 3.3 Honest tension
 
@@ -219,6 +222,41 @@ thesis structurally true so the agent-fulfiller future slots in without a rename
 | `Gate` | `type(approval|budget), config, result(pass|fail|pending), decided_by, decided_at` |
 | `ActuatorHandle` | `state_backend_ref, workspace, outputs{}, status` |
 | `AuditEvent` | `type, actor, task_id, correlation_id, payload, ts` (append-only) |
+
+### 4.7 Execution profiles — dev (local) mode
+
+FlowOps runs in one of two **execution profiles**, selected by config
+(`FLOWOPS_PROFILE=dev|cloud`). Everything *above* the actuator — the
+`request → task → action` model, the job state machine, the gates, the audit trail, and
+the entire UI — is identical across profiles. Only the substrate changes.
+
+| Concern | `cloud` profile | `dev` profile (v1) |
+|---|---|---|
+| Actuator | `RealActuator` -> OpenTofu -> AWS/GCP | `DummyActuator` — simulated `plan/apply/destroy` with realistic state transitions and timing |
+| Execution | managed queue (SQS/Pub-Sub) + serverless container job | local DB-backed queue + in-process worker |
+| State | S3 + DynamoDB / GCS | local (Postgres / file) |
+| Budget gate | cloud-enforced (Budget + SCP + quota) | **advisory**, rendered as "dev — not enforced" |
+| Sandbox | its own AWS account / GCP project | simulated handle (no real infra) |
+| Teardown | delete the account/project | simulated destroy |
+
+**Goal:** `docker compose up` runs the complete loop — request, both gates, the full
+job state machine, TTL teardown, and the audit trail — on a laptop with **zero cloud
+credentials**. This is the contributor and out-of-the-box story, and it lets the entire
+product (including the lifecycle UI) be built and demoed *before* the week-0 cloud spike
+lands.
+
+**Invariants that still hold in dev mode:**
+
+- **Fail closed** applies in every profile (a missing cost preview still blocks approval).
+- **Dev mode is always visibly dev** — a profile badge in the UI and an advisory-budget
+  label, so a simulated budget can never be mistaken for an enforced one.
+- The `DummyActuator` is the same code that serves as the test double, so dev mode and the
+  test suite exercise one implementation.
+
+**Deliberately NOT in v1 dev mode** (deferred — see "NOT in scope"): a LocalStack path
+that runs *real* OpenTofu against emulated AWS, and a `local-docker` blueprint whose
+sandbox is a usable local container. Both are natural fast-follows once the cloud loop is
+proven; v1 dev mode is Dummy-only by design, to stay cheap.
 
 ---
 
@@ -373,6 +411,39 @@ defines that schema first.
 7. Licensing: `LICENSE` (AGPL-3.0), `COMMERCIAL.md`, CLA bot, documented open-core line.
 8. Design: `DESIGN.md` (NYS token mapping), build the lifecycle view from the approved
    mockup, implement all interaction states, WCAG 2.1 AA pass.
+
+---
+
+## 8.5 Security Requirements (CSO threat model, 2026-06-09)
+
+FlowOps holds cloud credentials, executes IaC, can delete cloud accounts, and enforces
+spend — so these are build-blocking requirements, not hardening to add later. The plan
+already defends well on OIDC (no static keys), account-per-sandbox isolation, fail-closed
+gates, control-plane state isolation, and module pinning. The requirements below close the
+gaps the threat model surfaced. (AGPL = attackers can read the source; assume zero
+obscurity throughout.)
+
+- **SR1 [P1] — Blueprints are an admin-curated catalog; users never supply OpenTofu.**
+  The runner executes blueprint modules with a powerful cloud role. Module source is
+  allow-listed (pinned repo refs only); creating/editing a blueprint is an admin-gated,
+  audited action. Prevents arbitrary cloud execution by non-admins.
+- **SR2 [P1] — Aggregate spend + concurrency limits (denial-of-wallet).** Per-sandbox
+  budget is not enough. Enforce a per-user/per-org **aggregate budget**, a **rate limit**
+  on requests, and a **cap on concurrent live sandboxes** — all fail-closed.
+- **SR3 [P2] — Tamper-evident audit.** Append-only is not enough; the audit *is* the
+  product. Hash-chain audit events (each row signs the prior hash) and/or mirror to a
+  WORM / object-lock sink so tampering is detectable. (Matters doubly for NYS compliance.)
+- **SR4 [P2] — Split control-plane identities.** Separate the (org-level) account-vending
+  identity from the per-sandbox provisioning identity; use tight OIDC trust conditions
+  (exact subject + audience, no wildcards). Resolve in the week-0 spike.
+- **SR5 [P2] — No default credentials outside the `dev` profile.** The PoC's seed-on-boot
+  default admin (`admin/admin123` etc.) must never exist in a non-dev deployment; force an
+  admin password set on first real boot.
+- **SR6 [P2] — Sign the runner image.** SHA-pin GitHub Actions, sign images
+  (cosign + SLSA provenance), restrict who can push release tags, and scope CI's OIDC so a
+  compromised pipeline cannot reach prod cloud.
+- **SR7 [P2] — Explicit authz on destroy/extend.** Teardown deletes accounts; gate the
+  destroy and TTL-extend transitions like apply — owner-or-admin only, always audited.
 
 ---
 
