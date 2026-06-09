@@ -1,0 +1,69 @@
+# ── OS / editor cruft ────────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+Thumbs.db
+*.swp
+*~
+.idea/
+.vscode/
+*.code-workspace
+
+# ── gstack / Claude tooling (local, not project source) ──────────────
+.gstack/
+.claude/
+
+# ── Secrets & local config ───────────────────────────────────────────
+.env
+.env.*
+!.env.example
+*.local
+secrets/
+*.pem
+*.key
+
+# ── Python (control plane) ───────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+.venv/
+venv/
+env/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+
+# ── Node / frontend ──────────────────────────────────────────────────
+node_modules/
+frontend/dist/
+frontend/.vite/
+*.tsbuildinfo
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ── OpenTofu / Terraform (NEVER commit state or vars) ────────────────
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfvars.json
+crash.log
+override.tf
+override.tf.json
+# keep the provider lock committed (supply-chain integrity):
+!.terraform.lock.hcl
+
+# ── Databases / runtime artifacts ────────────────────────────────────
+*.sqlite
+*.sqlite3
+*.db
+*.log
+logs/
+tmp/
