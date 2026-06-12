@@ -4,11 +4,13 @@
 actually *built* — with controls (approval, budget, policy, audit) that never come off.
 
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL%203.0-blue.svg)](LICENSE)
-[![Status: pre-implementation](https://img.shields.io/badge/status-planning%20complete-orange.svg)](docs/ARCHITECTURE_AND_DESIGN.md)
+[![Status: building](https://img.shields.io/badge/status-building%20(v0.1)-orange.svg)](CHANGELOG.md)
 
-> **Status: pre-implementation.** The product is fully planned (architecture, design,
-> and strategy reviews complete) and the build is starting. The commands below describe
-> the target experience. Follow the repo to watch it land. See the full
+> **Status: building.** Planning is complete (architecture, design, and strategy reviews)
+> and the control plane is landing piece by piece — v0.1.0.0 shipped the durable jobs
+> table (Postgres-backed state machine, idempotency keys, crash reconciliation; see the
+> [CHANGELOG](CHANGELOG.md)). The frontend and real cloud actuation are still to come, so
+> some commands below still describe the target experience. See the full
 > [Architecture & Design document](docs/ARCHITECTURE_AND_DESIGN.md).
 
 ---

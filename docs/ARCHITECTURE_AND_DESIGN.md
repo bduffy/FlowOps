@@ -7,7 +7,7 @@ date: "June 10, 2026"
 
 # FlowOps — Architecture & Design Document
 
-**Status:** Plan approved (Eng + CEO + Design reviews cleared). Pre-implementation.
+**Status:** Plan approved (Eng + CEO + Design reviews cleared). Implementation in progress (durable jobs table shipped in v0.1.0.0, #5).
 **Version:** 1.1 (v1 scope; gap-closure revision, 2026-06-10)
 **Document owner:** Brian Duffy
 

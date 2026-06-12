@@ -1,36 +1,43 @@
 # FlowOps — CLAUDE.md
 
-Open-source **governed self-service provisioning platform** — "the governed actuation layer." A request passes a gate (approval + cloud-enforced budget) and gets *built* (real infra via OpenTofu), then auto-torn-down on a TTL, every step audited. Keeps ITSM's `request → task → action` model; makes a task's fulfiller a human, an automation, or an AI agent — governance constant no matter who does the work. **Status: pre-implementation** (architecture/design/strategy reviews complete). Source of truth for the plan: `docs/ARCHITECTURE_AND_DESIGN.md`. **Read `DESIGN.md` before any visual/UI decision — it is authoritative; flag (don't silently change) anything that deviates.** (`DESIGN.md` is task DS1, not yet written; until it exists, the NYS Design System + the approved mockup at `docs/assets/sandbox-lifecycle-approved.png` are authoritative.)
+Open-source **governed self-service provisioning platform** — "the governed actuation layer." A request passes a gate (approval + cloud-enforced budget) and gets *built* (real infra via OpenTofu), then auto-torn-down on a TTL, every step audited. Keeps ITSM's `request → task → action` model; makes a task's fulfiller a human, an automation, or an AI agent — governance constant no matter who does the work. **Status: building** — v0.1.0.0 shipped the Postgres-backed durable jobs table (#5); frontend and real cloud actuation have not landed yet. Source of truth for the plan: `docs/ARCHITECTURE_AND_DESIGN.md`. **Read `DESIGN.md` before any visual/UI decision — it is authoritative; flag (don't silently change) anything that deviates.** (`DESIGN.md` is task DS1, not yet written; until it exists, the NYS Design System + the approved mockup at `docs/assets/sandbox-lifecycle-approved.png` are authoritative.)
 
 ## Stack & environment
 - **Control plane:** Python + FastAPI, PostgreSQL.
 - **Execution:** durable queue (SQS / Pub-Sub) → serverless container job (AWS Fargate / GCP Cloud Run Job) running **OpenTofu** (not Terraform).
 - **Frontend:** React, themed via NYS Design System tokens (`--nys-color-*`), WCAG 2.1 AA.
 - **Default branch:** `trunk` (CI/deploy run on push to `trunk`).
-- **Package managers:** `uv` (Python) · `npm` (frontend). *(Verify once scaffolded — code not yet imported.)*
+- **Package managers:** `uv` (Python) · `npm` (frontend — not scaffolded yet).
 
-## Commands *(planned — not yet wired; verify exact scripts when scaffolded)*
+## Commands
 ```bash
+docker compose up -d db      # Postgres — required by the jobs-table tests (the 14 gate/state-machine tests stay DB-free)
 uv run pytest                # control-plane tests (fail-path suite is the point)
-uv run uvicorn app.main:app --reload   # run the API locally
-npm --prefix frontend run dev          # run the board
-npm --prefix frontend run a11y         # WCAG AA token/contrast gate — must pass
-FLOWOPS_PROFILE=dev docker compose up   # full loop locally, zero cloud creds (dev mode)
+uv run uvicorn flowops.api.app:app --reload   # run the API locally (runs migrations at startup)
+uv run python -m flowops.db.migrate           # apply versioned SQL migrations (ops; API startup also runs them)
+uv run python -m flowops.jobs.reconcile       # crash-reconciliation sweep (repairs dead-worker jobs)
+FLOWOPS_PROFILE=dev docker compose up   # full loop locally, zero cloud creds (dev mode; API + Postgres)
+npm --prefix frontend run dev          # run the board (planned — frontend not scaffolded)
+npm --prefix frontend run a11y         # WCAG AA token/contrast gate — must pass (planned)
 tofu fmt -recursive && tofu validate   # blueprint modules
 gh issue create|edit|close   # all task operations
 codex exec "..."             # independent second opinion (see Multi-model lanes)
 ```
+Env vars: `FLOWOPS_DATABASE_URL` (**required outside the dev profile** — the control plane fails closed without it; dev defaults to localhost) · `FLOWOPS_LEASE_TTL_SECONDS` (job lease TTL, default 900) · `FLOWOPS_TEST_DATABASE_URL` (test DB, defaults to `…/flowops_test`).
 
-## Repo map *(current = docs only; rest is the planned layout from the design doc)*
+## Repo map *(control plane lives under `src/flowops/`; frontend + infra vending still planned)*
 - `docs/` — `ARCHITECTURE_AND_DESIGN.md` (plan SoT), `assets/` (approved mockups), `PoC_UserGuide.md`
-- `api/` — FastAPI control plane: intake, board, gates *(planned)*
-- `actuators/` — `Actuator` interface + `RealActuator` (container job) + `DummyActuator` (dry-run/test double) *(planned)*
-- `gates/` — approval + cloud-enforced budget gates *(planned)*
-- `jobs/` — job state machine + queue worker + TTL teardown worker *(planned)*
-- `audit/` — append-only event stream *(planned)*
-- `infra/` — account/project vending, budget/SCP, OIDC trust; curated OpenTofu blueprint modules *(planned)*
-- `frontend/` — React board + sandbox lifecycle view *(planned)*
-- `models/` — shared domain model (`request → task → action`) *(planned)*
+- `src/flowops/api/` — FastAPI control plane: intake, board, gates
+- `src/flowops/actuators/` — `Actuator` interface + `RealActuator` (container job) + `DummyActuator` (dry-run/test double)
+- `src/flowops/gates/` — approval + cloud-enforced budget gates
+- `src/flowops/jobs/` — job state machine + executor (lease/claim protocol) + crash-reconciliation sweep; TTL teardown worker *(planned)*
+- `src/flowops/db/` — migration runner + versioned SQL migrations
+- `src/flowops/audit/` — append-only event stream
+- `src/flowops/models/` — shared domain model (`request → task → action`)
+- `src/flowops/store.py` · `services.py` · `config.py` — Postgres store, sandbox service, settings
+- `tests/` — fail-path suite; the jobs-table tests need real Postgres (`docker compose up -d db`)
+- `infra/` — spike harnesses (AWS/GCP); account/project vending, budget/SCP, OIDC trust, curated OpenTofu blueprint modules *(planned)*
+- `frontend/` — React board + sandbox lifecycle view *(placeholder — see `frontend/README.md`)*
 
 ## Working agreement
 - **Plan first:** enter plan mode for any task ≥3 steps or with architectural decisions; write the spec, get approval, then build. If it goes sideways, stop and re-plan — don't push through.

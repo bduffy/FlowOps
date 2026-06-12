@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime
 
 from .enums import (
     BlueprintAvailability,
@@ -40,6 +41,7 @@ class Blueprint:
     tofu_module_ref: str  # pinned ref — never user-supplied (SR1)
     budget_cap_usd: float
     ttl_hours: int
+    version: int = 1  # snapshotted onto the task at apply; destroy runs the snapshot
     allowed_roles: tuple[str, ...] = ("admin", "worker")
     availability: BlueprintAvailability = BlueprintAvailability.AVAILABLE
 
@@ -73,6 +75,14 @@ class Task:
     state: JobState = JobState.QUEUED
     gates: list[GateRecord] = field(default_factory=list)
     handle: ActuatorHandle | None = None
+    # Durable-job fields (#5). The task IS the job row; 1:1 task<->sandbox means
+    # the row lease doubles as the per-sandbox lock.
+    idempotency_key: str | None = None
+    blueprint_version: int | None = None  # pinned at submit (§4.6)
+    run_id: str | None = None  # actuator-run identity, pinned before side effects
+    orphan_suspected: bool = False
+    lease_owner: str | None = None
+    lease_expires_at: datetime | None = None
 
 
 @dataclass
