@@ -1,9 +1,16 @@
 #!/usr/bin/env bash
 # Week-0 spike — GCP orphan detection. Throwaway.
 #
-# The hard problem: find resources that exist in the CLOUD but are ABSENT from tofu
-# state (lost/corrupt state, or a half-failed apply). We do NOT trust tofu state to
-# tell us what exists — we ask the cloud directly, by run-label, and diff.
+# Find buckets that exist in the CLOUD but are ABSENT from tofu state (lost/corrupt
+# state, or a half-failed apply). We ask the cloud directly — not tofu state.
+#
+# GCP specifics learned the hard way:
+#   - buckets live in a PROJECT; scope the scan to the sandbox project (arg 2), not
+#     gcloud's default project.
+#   - gcloud's --filter/--format dotted paths treat `labels.flowops-spike-run` as
+#     subtraction (hyphens!). So we read each bucket's labels blob and grep the run-id
+#     in the shell, never via a gcloud filter expression.
+#   - no `mapfile` (bash 4+) — keep it bash 3.2 friendly.
 #
 # Usage: ./detect_orphans.sh <run_id> [project_id]
 set -euo pipefail
@@ -11,33 +18,31 @@ set -euo pipefail
 RUN_ID="${1:?usage: detect_orphans.sh <run_id> [project_id]}"
 PROJECT="${2:-}"
 
-echo "== GCP orphan scan for run=${RUN_ID} =="
+echo "== GCP orphan scan for run=${RUN_ID} project=${PROJECT:-<gcloud default>} =="
+[ -z "$PROJECT" ] && echo "  WARN: no project given — scanning gcloud's default project only"
 
-# 1. What does tofu THINK exists?
+proj_flag=()
+[ -n "$PROJECT" ] && proj_flag=(--project "$PROJECT")
+
+# 1. State view.
 in_state="$(tofu state list 2>/dev/null | grep -c 'google_storage_bucket' || true)"
 echo "tofu state: ${in_state} bucket(s) tracked"
 
-# 2. What ACTUALLY exists in the cloud, by label? (source of truth)
-#    Scope to the sandbox project if given, else search the ambient project.
-project_flag=()
-[ -n "$PROJECT" ] && project_flag=(--project "$PROJECT")
-
-mapfile -t cloud_buckets < <(
-  gcloud storage buckets list "${project_flag[@]}" \
-    --filter="labels.flowops-spike-run=${RUN_ID}" \
-    --format="value(name)" 2>/dev/null || true
-)
-echo "cloud:       ${#cloud_buckets[@]} bucket(s) labeled run=${RUN_ID}"
-
-# 3. Diff: anything in the cloud that tofu state does not know about = ORPHAN.
+# 2. Cloud view: list buckets in the project, check each one's labels for our run-id
+#    (in-shell, hyphen-safe). In cloud + not in tofu state = ORPHAN.
 orphans=()
-for b in "${cloud_buckets[@]}"; do
-  name="${b#gs://}"; name="${name%/}"
+while read -r name; do
+  [ -z "$name" ] && continue
+  labels="$(gcloud storage buckets describe "gs://${name}" \
+              "${proj_flag[@]}" --format='value(labels)' 2>/dev/null || true)"
+  printf '%s' "$labels" | grep -q -- "$RUN_ID" || continue   # not ours
   if ! tofu state list 2>/dev/null | xargs -I{} tofu state show {} 2>/dev/null \
        | grep -q "name *= *\"${name}\""; then
     orphans+=("$name")
   fi
-done
+done < <(gcloud storage buckets list "${proj_flag[@]}" --format="value(name)" 2>/dev/null || true)
+
+echo "cloud:       ${#orphans[@]} untracked bucket(s) labeled run=${RUN_ID}"
 
 if [ "${#orphans[@]}" -eq 0 ]; then
   echo "RESULT: no orphans (cloud and state agree)"

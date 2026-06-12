@@ -68,13 +68,16 @@ run_cloud() {
   say "$cloud · phase 5: orphan detection (state lost)"
   TF_VAR_inject_failure=false tofu apply -auto-approve -input=false -no-color \
       >/tmp/spike-$cloud-orphan-apply.log 2>&1 || { bad "orphan-setup apply failed"; return; }
-  local bucket addr
+  local bucket addr proj=""
   bucket="$(tofu output -raw sandbox_bucket 2>/dev/null)"
+  # GCS buckets live in a project; the detector must be told which one (gcloud's
+  # default project is not the sandbox project). Capture it BEFORE state rm.
+  [ "$cloud" = gcp ] && proj="$(tofu output -raw sandbox_project_id 2>/dev/null || true)"
   addr="$([ "$cloud" = gcp ] && echo google_storage_bucket.sandbox || echo aws_s3_bucket.sandbox)"
   tofu state rm "$addr" >/dev/null 2>&1   # simulate lost/corrupt state -> bucket is now an orphan
   note "removed $bucket from tofu state (now an orphan in the cloud)"
 
-  if ./detect_orphans.sh "$RUN_ID" >/tmp/spike-$cloud-detect.log 2>&1; then
+  if ./detect_orphans.sh "$RUN_ID" "$proj" >/tmp/spike-$cloud-detect.log 2>&1; then
     bad "orphan detector found nothing (it should have found $bucket)"
   else
     grep -q "$bucket" /tmp/spike-$cloud-detect.log \
@@ -85,6 +88,8 @@ run_cloud() {
   # cleanup the orphan via cloud CLI (tofu no longer tracks it)
   if [ "$cloud" = gcp ]; then gcloud storage rm --recursive "gs://$bucket" >/dev/null 2>&1 || true
   else aws s3 rb "s3://$bucket" --force >/dev/null 2>&1 || true; fi
+  # destroy anything still tracked (e.g. a created sandbox project in GCP create mode)
+  tofu destroy -auto-approve -input=false -no-color >/dev/null 2>&1 || true
   note "orphan reclaimed"
   rm -f terraform.tfstate terraform.tfstate.backup 2>/dev/null || true
 }
