@@ -16,9 +16,10 @@ actually *built* — with controls (approval, budget, policy, audit) that never 
 ## What FlowOps is
 
 FlowOps is an open-source **governed self-service provisioning platform**. A person (or
-an AI agent) requests something — say, a developer sandbox — it passes a policy and
-budget gate, and the platform *provisions it for real* and tears it down on a schedule,
-with a complete audit trail. The controls are the product.
+an AI agent) requests something — say, a developer sandbox — it passes an approval and
+cloud-enforced budget gate, and the platform *provisions it for real* and tears it down
+on a schedule, with a complete audit trail. The controls are the product.
+(Policy-engine gates — OPA/Cedar — are on the roadmap, post-v1.)
 
 It lives in the unserved middle between two bad options:
 
@@ -60,7 +61,10 @@ stays constant no matter who or what does the work.
   for capabilities that aren't live yet).
 - **Isolation:** each sandbox is its own cloud account/project. Teardown deletes the
   account, which makes orphaned resources structurally hard to leave behind.
-- **Audit:** every plan, approval, apply, and destroy is an append-only event.
+- **Access:** on success the requester gets a federated console link + short-lived
+  credentials — shown once, never stored. No static keys, anywhere.
+- **Audit:** every plan, approval, apply, destroy, and access grant is an append-only
+  event.
 
 ## Architecture at a glance
 
@@ -111,7 +115,9 @@ identical to the cloud profile, so what you build in dev mode is what runs in pr
 - **Control plane:** Python / FastAPI, PostgreSQL
 - **Execution:** a durable queue (SQS / Pub-Sub) feeding a serverless container job
 - **Provisioning:** [OpenTofu](https://opentofu.org) (the open-source IaC engine)
-- **Clouds:** AWS and GCP (one is implemented first; the actuator interface ports the rest)
+- **Clouds:** AWS and GCP — one is implemented first. The `Actuator` seam ports the
+  provisioning; account vending, budget enforcement, and OIDC trust are per-cloud work
+  in `infra/`
 - **Frontend:** React, themed via the
   [NYS Design System](https://designsystem.ny.gov/) tokens, WCAG 2.1 AA
 
@@ -120,8 +126,8 @@ identical to the cloud profile, so what you build in dev mode is what runs in pr
 | Phase | What | Status |
 |---|---|---|
 | v1 | Dev-sandbox vending: request → approval + budget gate → OpenTofu → TTL teardown → audit | **Building** |
-| Fast-follow | AI sandbox blueprint; the agent fulfiller (agents do tasks inside the gates) | Planned |
-| Later | Pluggable policy (OPA/Cedar), multi-cloud, embeddable actuation core | Planned |
+| Fast-follow | The agent fulfiller (agents do tasks inside the gates) + an MCP server for the API; AI sandbox blueprint; LocalStack dev path; `local-docker` blueprint | Planned |
+| Later | Policy-engine gates (OPA/Cedar), second cloud, warm account pool, embeddable actuation core | Planned |
 
 The agent fulfiller is the heart of the vision and is deliberately *not* in v1 — v1
 proves the governed-actuation loop end to end first.
@@ -132,8 +138,9 @@ FlowOps is **open-core**:
 
 - **Free / open source (AGPL-3.0):** the complete single-organization governed-actuation
   loop — request → task → action, the actuator, approval + cloud-enforced budget gates,
-  TTL teardown, audit, account/project vending, the dev-sandbox blueprint, the REST API,
-  and RBAC. A real team runs this in production.
+  TTL teardown, audit, account/project vending, the dev-sandbox blueprint, the REST API
+  (OpenAPI, agent-ready), and role-based access (requester / approver / admin). A real
+  team runs this in production.
 - **Commercial license:** for organizations that need multi-tenancy, SSO/SAML/SCIM,
   advanced policy, hosted runners, audit retention / compliance evidence, and support —
   or that want to embed FlowOps in a proprietary platform without AGPL's network-copyleft

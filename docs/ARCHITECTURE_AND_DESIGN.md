@@ -2,13 +2,13 @@
 title: "FlowOps — Architecture & Design Document"
 subtitle: "Governed self-service provisioning: the governed actuation layer"
 author: "Brian Duffy"
-date: "June 8, 2026"
+date: "June 10, 2026"
 ---
 
 # FlowOps — Architecture & Design Document
 
 **Status:** Plan approved (Eng + CEO + Design reviews cleared). Pre-implementation.
-**Version:** 1.0 (v1 scope)
+**Version:** 1.1 (v1 scope; gap-closure revision, 2026-06-10)
 **Document owner:** Brian Duffy
 
 ---
@@ -16,8 +16,8 @@ date: "June 8, 2026"
 ## 1. Executive Summary
 
 FlowOps is an open-source **governed self-service provisioning platform** — *the
-governed actuation layer*. It lets a person request infrastructure, pass a policy and
-budget gate, and have it actually **built** — with controls (approval, budget, policy,
+governed actuation layer*. It lets a person request infrastructure, pass an approval and
+cloud-enforced budget gate, and have it actually **built** — with controls (approval, budget, policy,
 audit) that never come off, and with agents and automation able to do the work *inside*
 the guardrails.
 
@@ -36,8 +36,8 @@ loop end to end. It lives in the unserved middle between ClickOps (manual, ungov
 doesn't scale) and full CI/CD pipelines (overkill, get in the way).
 
 This document captures the objectives, the chosen approach, the engineering
-architecture, the design system, and the strategy, as decided across four structured
-reviews (product, engineering, strategy, design).
+architecture, the design system, and the strategy, as decided across five structured
+reviews (product, engineering, strategy, design, and a gap-closure re-review).
 
 ---
 
@@ -79,6 +79,24 @@ The seam almost nobody owns is the *middle*: intake + governance + actuation as 
 loop, where the gate, the budget check, the policy enforcement, and the provisioning are
 the same system, and agents do the labor inside the guardrails.
 
+### 2.3 Definition of done (v1)
+
+The objectives become testable here. v1 is done when all of the following hold
+(dimensions are committed now; exact numbers — X, N, Y — are fixed during the week-0
+spike):
+
+1. A non-author colleague requests a sandbox and gets a **usable** one (access link in
+   hand — §4.9) within X minutes of approval.
+2. N consecutive full lifecycles (request → gate → apply → TTL → destroy) leave **zero
+   orphaned spend** after the reconcile sweep — including runs with injected mid-apply
+   failures.
+3. 100% of expired TTLs are destroyed within grace period + X, and every teardown ran
+   all four guardrails (dry-run, grace period, owner notification, never-destroy check
+   — §4.11).
+4. Every state transition emits an audit event — verified by test, not by inspection.
+5. `FLOWOPS_PROFILE=dev docker compose up` runs the complete loop on a clean laptop in
+   ≤ Y minutes with zero cloud credentials.
+
 ---
 
 ## 3. Scope
@@ -104,6 +122,10 @@ entire loop on a laptop with zero cloud credentials (see §4.7).
 | Multi-tenancy, SSO, hosted runners | Commercial / open-core layer, post-v1. |
 | LocalStack dev path (real OpenTofu vs emulated AWS) | Fast-follow to dev mode; v1 dev mode is Dummy-only (§4.7). |
 | `local-docker` blueprint (usable local sandbox) | Fast-follow; lets dev mode build a real local container, not just a simulated handle. |
+| Per-sandbox in-place upgrades (re-apply a new blueprint version) | Sandboxes are immutable + disposable in v1; destroy and re-vend (§4.6 versioning). |
+| MCP server for the control-plane API | Ships with the agent fulfiller (fast-follow #1); the v1 API is agent-ready (§4.12) but not agent-packaged. |
+| Multi-channel notifications (Slack, Teams, SMS) | v1 ships in-app + one configurable channel (§4.10). |
+| Policy-engine gates (OPA / Cedar) | Post-v1 (§10); v1 gates stay concrete: approval + cloud-enforced budget. |
 
 ### 3.3 Honest tension
 
@@ -174,6 +196,11 @@ assumes a scoped role via OIDC — no stored static keys.
   whole account/project, not by hoping a tag-sweep caught everything.
 - Orphan-*resistant*, not instant or perfect: AWS account closure has a ~90-day window,
   GCP project deletion a ~30-day recovery window, plus billing tails — design for the tail.
+- **The closure tail counts against vending quota.** Closed-pending AWS accounts (that
+  ~90-day window) still count toward the Organizations account quota, so steady-state
+  vending can starve even when quota looks ample. The vending quota gauge (§5.6) tracks
+  active + pending-close as one number with an alert threshold, and raising the account
+  quota is a week-0 action, not a launch-day surprise.
 - OpenTofu **state lives in the control-plane account**, encrypted, with secrets
   redacted and access isolated.
 
@@ -209,6 +236,14 @@ allowlist on the sandbox account. A declared "this fits under $X" is governance 
 the cloud-enforced ceiling is the only real control — and it removes the need for live
 cost estimation in v1.
 
+**Latency honesty + breach behavior.** AWS Budgets data lags by hours — the *instant*
+ceiling is the quota set + the SCP service allowlist; the Budget action is the backstop,
+not the tripwire. And when a breach signal arrives, FlowOps observes it rather than
+trusting the cloud to act silently: the sandbox is flagged `over_budget` in status, the
+owner is notified (§4.10), an audit event is recorded, and an operator can trigger
+accelerated teardown through the normal destroy path (§4.11). A budget breach is never a
+silent death.
+
 ### 4.6 Domain model
 
 `request -> task -> action`, kept thin (no ITSM ceremony — no SLAs, categories, queues).
@@ -217,11 +252,19 @@ thesis structurally true so the agent-fulfiller future slots in without a rename
 
 | Entity | Key fields |
 |---|---|
-| `Blueprint` | `id, type(dev|ai), tofu_module_ref, budget_cap, ttl_hours, default_region, allowed_roles, availability` |
-| `Task` | `fulfiller_type(human|automation|agent), gate_results[], actuator_handle` |
-| `Gate` | `type(approval|budget), config, result(pass|fail|pending), decided_by, decided_at` |
+| `User` | `id, username, role(requester\|approver\|admin), groups[]` — local JWT auth (§4.8) |
+| `Blueprint` | `id, version, type(dev\|ai), tofu_module_ref, budget_cap, ttl_hours, max_lifetime_hours, max_extensions, default_region, allowed_roles, availability` |
+| `Task` | `fulfiller_type(human\|automation\|agent), gate_results[], actuator_handle, blueprint_version (pinned at apply), idempotency_key` |
+| `Gate` | `type(approval\|budget), config, result(pass\|fail\|pending), decided_by, decided_at` |
 | `ActuatorHandle` | `state_backend_ref, workspace, outputs{}, status` |
 | `AuditEvent` | `type, actor, task_id, correlation_id, payload, ts` (append-only) |
+
+**Blueprint versioning.** A task snapshots `(blueprint_version, tofu_module_ref,
+provider-lockfile hash)` at apply time — immutable job inputs, made concrete. **Destroy
+runs the pinned version that applied, never latest** (destroying with a drifted module is
+how teardown breaks). Blueprint edits append a new version, never mutate (consistent with
+SR1's admin-gated, audited curation); running sandboxes are unaffected, and in-place
+upgrades are explicitly out of v1 scope (§3.2) — sandboxes are immutable and disposable.
 
 ### 4.7 Execution profiles — dev (local) mode
 
@@ -258,6 +301,92 @@ that runs *real* OpenTofu against emulated AWS, and a `local-docker` blueprint w
 sandbox is a usable local container. Both are natural fast-follows once the cloud loop is
 proven; v1 dev mode is Dummy-only by design, to stay cheap.
 
+### 4.8 Identity, roles & approval semantics
+
+v1 authentication is the PoC's local JWT auth, ported (username/password → JWT session),
+with SR5 enforced: no seeded credentials outside the `dev` profile. SSO/SAML/SCIM stay on
+the commercial side (§7). Authorization is deliberately thin — a `role` column, not a
+policy engine:
+
+| Role | Can |
+|---|---|
+| `requester` | submit requests; view, extend, and destroy *own* sandboxes (within §4.11 limits) |
+| `approver` | everything a requester can, plus decide approval gates they are authorized for |
+| `admin` | everything, plus blueprint curation (SR1), user/role management, never-destroy flags |
+
+- An approver is authorized per blueprint via `Blueprint.allowed_roles`; an unknown or
+  unlisted role cannot approve — fail closed.
+- **Self-approval is denied.** The requester of a task can never decide its own approval
+  gate, even as an admin — separation of duties, enforced fail-closed.
+- Requests pending approval **auto-expire** after a configurable number of days (§5.7)
+  into `rejected`, audited — the board never accumulates zombie requests holding a gate
+  open forever.
+- Every role change and approval decision is an audit event with actor provenance.
+
+### 4.9 Sandbox access delivery
+
+A sandbox in its own account is useless until the requester can reach it — access
+delivery is part of the loop, not an afterthought. The blueprint module creates a scoped
+role *inside* the sandbox account whose trust policy names the requester's identity. On
+`apply` success, FlowOps surfaces:
+
+- a **federated console sign-in URL**, and
+- **short-lived CLI credentials** (STS-style, minutes-to-hours TTL),
+
+both shown **once, to the requester only**. Neither is persisted: not in Postgres, not in
+audit payloads, not unredacted in OpenTofu state (§5.3 redaction rules apply). Re-issuing
+access is a fresh, audited action — the `access_issued` event records who, when, and for
+which sandbox, never the credential material. Static keys never exist on this path,
+matching the OIDC-everywhere posture.
+
+### 4.10 Notifications
+
+The teardown guardrails (§4.11) and failure alerts require an owner-notification channel,
+so v1 ships one — minimal but real:
+
+- **In-app** (board banner + lifecycle view) is the **guaranteed** channel; it cannot be
+  misconfigured away.
+- **One configurable best-effort channel:** SMTP email *or* a single webhook URL (§5.7).
+  Multi-channel (Slack/Teams/SMS) is post-v1 (§3.2).
+
+The interaction with teardown is defined so a broken mail server can't become infinite
+spend: the grace period is **time-based and starts regardless**; every notification
+*attempt and its outcome* is audited; an undeliverable notification flags the event for
+the operator but never blocks teardown forever. The `dev` profile notifies in-app/log
+only.
+
+### 4.11 TTL, extension & teardown policy
+
+- TTL extension is gated like apply (SR7: owner-or-admin, always audited) **and
+  bounded**: a sandbox may be extended at most `max_extensions` times and never past
+  `max_lifetime_hours` (both per-blueprint — §4.6). An extension that would exceed either
+  limit is denied — fail closed.
+- **The never-destroy guard, defined.** Its primary job is structural: the teardown
+  worker **refuses to destroy any account/project it cannot positively identify as a
+  FlowOps-vended sandbox** (unparseable or unrecognized handle = DENY). The control plane
+  and every non-vended account are protected by construction, not by configuration. On
+  top of that, an admin can set an audited `never_destroy` flag on a specific sandbox
+  (e.g., one under incident investigation); the TTL worker skips it and alerts instead of
+  destroying.
+- Every teardown runs all four guardrails: dry-run, grace period, owner notification
+  (§4.10), never-destroy check.
+
+### 4.12 API contract — agent-ready by construction
+
+Fast-follow #1 makes an AI agent a fulfiller; v1's job is to make sure the API needs no
+rework when that lands. This is contract hygiene on the existing REST surface — not a new
+abstraction, and no agent-specific endpoints ship in v1:
+
+- a published **OpenAPI contract** (FastAPI emits this for free);
+- **idempotency keys on request creation** — the same key the jobs layer already
+  requires, extended to the API edge, so a retried `POST` can never double-provision;
+- **machine-readable gate denials**: a structured error code + which gate failed + a
+  remediation field, never prose-only;
+- status enums identical to the job state machine (§4.2) — no UI-only states;
+- **correlation IDs** in every response, matching the audit stream.
+
+An MCP server packaging this API ships *with* the agent fulfiller, not before (§3.2).
+
 ---
 
 ## 5. Engineering Considerations
@@ -268,7 +397,7 @@ proven; v1 dev mode is Dummy-only by design, to stay cheap.
 |---|---|---|
 | Mid-apply failure -> orphaned spend | account/project deletion + reconcile sweep + test | No — job->failed, owner alerted |
 | Worker crash mid-apply -> double-apply | idempotency key + per-sandbox lock + redelivery test | No |
-| Budget bypass -> runaway spend | cloud-enforced budget + SCP + quota (hard ceiling) | No — cloud kills it |
+| Budget bypass -> runaway spend | cloud-enforced budget + SCP + quota (hard ceiling) | No — cloud blocks it; FlowOps surfaces the breach (§4.5) |
 | Wrongful teardown -> data loss | grace period + owner notice + never-destroy guard + fail-closed | No |
 | Missing cost/budget config | fail-closed (block apply) | No |
 | Control-plane compromise | state encryption + secret redaction + access isolation | Residual risk — flagged, monitored |
@@ -282,7 +411,8 @@ proceeds.
 Full failure-path coverage. The failure tests *shape* the job model — the state machine
 and its failure tests are written first, before happy-path actuation. `DummyActuator`
 drives fast, deterministic unit and integration tests with zero cloud credentials;
-integration tests against real OpenTofu (localstack / a throwaway project) cover state
+integration tests against real OpenTofu (a throwaway cloud project, or LocalStack as CI
+scaffolding — distinct from the deferred LocalStack-as-dev-mode path in §3.2) cover state
 locking and cloud-failure semantics the dummy cannot prove. Required tests include:
 mid-apply failure + reconcile, crash redelivery (no double-apply), budget at/over/under
 cap, missing-cost-preview = fail closed, teardown guardrails, and quota exhaustion.
@@ -308,6 +438,37 @@ AGPL-3.0 core in an OSS repo. `docker compose up` runs the **app** in minutes; t
 **actuation** half requires guided cloud wiring (it cannot be zero-config). CI via GitHub
 Actions builds/publishes container images on tag, with GitHub Releases for versioned
 artifacts. A hosted/managed offering is deferred until after v1 delights a self-host user.
+
+### 5.6 Operability & DR
+
+FlowOps must be operable by the team that runs it. v1 *emits and documents*; dashboards
+are post-v1.
+
+- A `/healthz` endpoint, plus a metrics endpoint exposing **jobs by state, queue depth,
+  and oldest-job age**. A stuck job is a lease that expired — the lease-expiry sweep from
+  §4.2 *is* the stuck-job detector, surfaced as a metric rather than invented as new
+  machinery.
+- **Account-vending quota gauge:** active + pending-close accounts as one number, with an
+  alert threshold (§4.3). The "log the cap" footgun, promoted to a metric so a silent
+  throughput ceiling can't masquerade as "covered."
+- **Backup/DR:** scheduled Postgres backups, and state-backend object versioning +
+  object-lock — the same mechanism that gives SR3 its WORM audit mirror. Losing OpenTofu
+  state is recoverable *because* teardown = delete-the-account: the destroy path never
+  depends on state being intact.
+
+### 5.7 Control-plane configuration & secrets
+
+OIDC removes static *cloud* keys, but the control plane holds secrets of its own:
+Postgres credentials, the JWT signing key, SMTP/webhook credentials. All are sourced from
+environment / a secret manager — never the repo, never CI (per the CI/CD rules). The same
+config home carries the operational knobs, each shipped with a conservative default — an
+explicitly unset limit means the default applies, never "unlimited":
+
+- the SR2 limits: per-user/per-org aggregate budget, request rate limit,
+  concurrent-sandbox cap;
+- the approval auto-expiry window (§4.8);
+- the notification channel (§4.10);
+- `FLOWOPS_PROFILE` (§4.7).
 
 ---
 
@@ -401,16 +562,28 @@ defines that schema first.
 
 ### 8.2 Sequenced tasks (highlights)
 
-1. **Week-0 spike (blocking):** prove apply/destroy/orphan-detect + OIDC trust +
-   budget/SCP against both GCP project and AWS account; pick the first cloud.
-2. Bring the PoC into the repo; module layout `api/ actuators/ gates/ jobs/ audit/ infra/`.
+1. **Week-0 spike (blocking) — exit criteria, all five required:**
+   - vend → apply → destroy → orphan-detect round trip proven on **both** GCP project
+     and AWS account, with round-trip times recorded;
+   - OIDC trust per SR4: exact subject + audience, split identities, no wildcards;
+   - budget + SCP/quota verified to **actually block** an over-cap action (not just
+     configured);
+   - account/project quota headroom measured, including the closure tail (§4.3), and
+     quota raises filed;
+   - first cloud chosen, with the decision and rationale recorded.
+2. Bring the PoC into the repo; module layout `api/ actuators/ gates/ jobs/ audit/ infra/`;
+   port PoC auth into the §4.8 role model.
 3. Jobs/state-machine table; queue + container-job runner.
-4. Actuator interface + Dummy + Real; approval + cloud-enforced budget gate.
-5. TTL teardown via the same job path; append-only audit.
-6. Full failure-path test suite (written with the state machine).
-7. Licensing: `LICENSE` (AGPL-3.0), `COMMERCIAL.md`, CLA bot, documented open-core line.
-8. Design: `DESIGN.md` (NYS token mapping), build the lifecycle view from the approved
-   mockup, implement all interaction states, WCAG 2.1 AA pass.
+4. Actuator interface + Dummy + Real; approval + cloud-enforced budget gate (with §4.8
+   approval semantics).
+5. TTL teardown via the same job path (with §4.11 limits + never-destroy guard);
+   append-only audit.
+6. Sandbox access delivery (§4.9) and the notification channel (§4.10).
+7. Full failure-path test suite (written with the state machine).
+8. Operability: healthz/metrics, quota gauge, backups (§5.6); config home (§5.7).
+9. Licensing: `LICENSE` (AGPL-3.0), `COMMERCIAL.md`, CLA bot, documented open-core line.
+10. Design: `DESIGN.md` (NYS token mapping), build the lifecycle view from the approved
+    mockup, implement all interaction states, WCAG 2.1 AA pass.
 
 ---
 
@@ -429,7 +602,8 @@ obscurity throughout.)
   audited action. Prevents arbitrary cloud execution by non-admins.
 - **SR2 [P1] — Aggregate spend + concurrency limits (denial-of-wallet).** Per-sandbox
   budget is not enough. Enforce a per-user/per-org **aggregate budget**, a **rate limit**
-  on requests, and a **cap on concurrent live sandboxes** — all fail-closed.
+  on requests, and a **cap on concurrent live sandboxes** — all fail-closed. Defaults and
+  configuration home: §5.7.
 - **SR3 [P2] — Tamper-evident audit.** Append-only is not enough; the audit *is* the
   product. Hash-chain audit events (each row signs the prior hash) and/or mirror to a
   WORM / object-lock sink so tampering is detectable. (Matters doubly for NYS compliance.)
@@ -444,24 +618,40 @@ obscurity throughout.)
   compromised pipeline cannot reach prod cloud.
 - **SR7 [P2] — Explicit authz on destroy/extend.** Teardown deletes accounts; gate the
   destroy and TTL-extend transitions like apply — owner-or-admin only, always audited.
+  Extensions are additionally bounded by `max_extensions` / `max_lifetime_hours` (§4.11).
 
 ---
 
 ## 9. Open Risks
 
 - **Control-plane blast radius:** state + secrets concentrate in the control plane.
-  Mitigated (encryption, redaction, isolation), not eliminated — monitor.
+  Mitigated (encryption, redaction, isolation — §5.3/§5.7), not eliminated — monitored
+  via the §5.6 operability surface.
 - **Account-factory weight:** the cloud factory could become the product before sandbox
-  vending exists. The week-0 spike timeboxes and de-risks this.
+  vending exists. The week-0 spike timeboxes and de-risks this; the §5.6 quota gauge
+  keeps its throughput ceiling visible after launch.
 - **"Out of the box" honesty:** the app runs out of the box; actuation requires guided
   cloud setup. Positioned as a batteries-included governed loop vs a BYO toolkit — a
   strength, framed honestly, not a retreat.
 
 ---
 
+## 10. Roadmap (beyond v1)
+
+Single source for what comes after the v1 loop; the README mirrors this table.
+
+| Horizon | What |
+|---|---|
+| **Fast-follow #1** | **The agent fulfiller**: an AI agent as `fulfiller_type=agent`, doing the work inside *unchanged* gates — plus an MCP server packaging the §4.12 API. The emotional center of the thesis, deliberately sequenced second. |
+| **Fast-follow** | AI sandbox blueprint (proves the actuator seam); LocalStack dev path (real OpenTofu against emulated AWS); `local-docker` blueprint (usable local sandbox). |
+| **Later** | Policy-engine gates (OPA/Cedar); the second cloud (whichever the spike didn't pick); warm pool of pre-vended accounts; broader lifecycle gates (destroy/extend/budget-increase); the embeddable actuation core. |
+| **Commercial** | Multi-tenancy, SSO/SAML/SCIM, hosted runners, audit retention / compliance evidence (§7). |
+
+---
+
 ## Appendix A — Review Provenance
 
-This plan was produced and pressure-tested across four structured reviews:
+This plan was produced and pressure-tested across five structured reviews:
 
 - **Product (office hours):** reframed work-intake PoC into AI-native ITSM / governed
   actuation; locked the sandbox wedge and "A + seam toward B" approach.
@@ -473,5 +663,12 @@ This plan was produced and pressure-tested across four structured reviews:
 - **Design review:** rated the new provisioning UI 3/10 -> 8/10; surfaced the NYS
   Design System + accessibility constraint; approved the lifecycle mockup; specified all
   interaction states.
+- **Gap-closure review (v1.1, 2026-06-10):** independent re-review of the approved plan;
+  closed 14 specification gaps without expanding v1 scope — identity/roles & approval
+  semantics (§4.8), sandbox access delivery (§4.9), notifications (§4.10), TTL/extension
+  limits + the never-destroy guard (§4.11), agent-ready API contract (§4.12), blueprint
+  version pinning (§4.6), budget-breach behavior (§4.5), the closure-tail quota footgun
+  (§4.3), operability & DR (§5.6), control-plane configuration (§5.7), a v1 definition
+  of done (§2.3), week-0 spike exit criteria (§8.2), and a consolidated roadmap (§10).
 
 All decisions were made by the project owner; cross-model input was advisory.

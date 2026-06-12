@@ -52,7 +52,7 @@ Full GStack catalog is available; these are the ones in regular rotation. Match 
 **Custom command — `/gemini-audit`:** lightweight diff security pass — `git diff trunk --name-only | xargs cat | gemini -p "Review these changed files for security vulnerabilities and output a summary"`, then format the result. Use `/cso` for a full threat model.
 
 ## Task management
-- **GitHub Issues are the single source of truth** (once a remote exists — repo is local-only today). Epics use child-issue checklists (`- [ ] #15 — …`).
+- **GitHub Issues are the single source of truth** (live at `bduffy/FlowOps` — backlog migrated 2026-06-09; see `TODOS.md` for the epic map). Epics use child-issue checklists (`- [ ] #15 — …`).
 - Labels: `P1`/`P2`/`P3`, `feature`, `infrastructure`, `design`, `a11y`, `security`, `backlog`.
 - Build tasks already enumerated in `docs/ARCHITECTURE_AND_DESIGN.md` and the gstack task JSONLs (`~/.gstack/projects/EasyITSM/tasks-*.jsonl`). **Start with the week-0 spike (T2).**
 
