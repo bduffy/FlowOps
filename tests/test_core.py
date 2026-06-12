@@ -1,21 +1,22 @@
-"""Core loop tests. Pure stdlib — run with: PYTHONPATH=src python3 -m unittest -v
+"""Core unit tests: gates, state machine, DummyActuator. No cloud, no DB.
 
-Proves the governed-actuation loop in dev mode with no cloud, no DB, no third-party deps.
+The governed-loop tests live in test_loop.py and the failure-path suite in
+test_jobs_durability.py — both run against the durable jobs table (#5).
 """
 
+import os
 import unittest
+from unittest import mock
 
 from flowops.actuators.base import Intent, Preview
 from flowops.actuators.dummy import DummyActuator
-from flowops.config import Settings
+from flowops.config import load_settings
 from flowops.gates.approval import ApprovalGate
 from flowops.gates.base import GateContext
 from flowops.gates.budget import BudgetGate
 from flowops.jobs.state_machine import InvalidTransition, can_transition, transition
 from flowops.models.enums import GateResult, JobState, Profile
-from flowops.services import SandboxService
 
-DEV = Settings(profile=Profile.DEV, region="us-east-1")
 ROLES = ("admin", "worker")
 
 
@@ -107,52 +108,17 @@ class StateMachineTests(unittest.TestCase):
         self.assertFalse(can_transition(JobState.REJECTED, JobState.APPLYING))
 
 
-class _AlwaysFailActuator(DummyActuator):
-    def apply(self, intent):  # noqa: D401
-        return super().apply(_intent(fail=True))
+class SettingsFailClosedTests(unittest.TestCase):
+    def test_non_dev_profile_requires_explicit_database_url(self):
+        # SR5: a cloud control plane must never silently start on default creds.
+        env = {"FLOWOPS_PROFILE": "cloud"}
+        with mock.patch.dict(os.environ, env, clear=True):
+            with self.assertRaises(RuntimeError):
+                load_settings()
 
-
-class LoopTests(unittest.TestCase):
-    def test_happy_path_submit_approve_apply_teardown(self):
-        svc = SandboxService(DEV)
-        req = svc.submit("dev-sandbox", "AWS dev sandbox", requester="jdoe", owner="jdoe")
-        self.assertIs(svc.state(req.id), JobState.AWAITING_GATE)
-
-        svc.decide(req.id, "approve", role="admin", actor="ssmith")
-        self.assertIs(svc.state(req.id), JobState.SUCCEEDED)
-
-        svc.teardown(req.id, actor="jdoe", actor_role="worker")  # owner may destroy
-        self.assertIs(svc.state(req.id), JobState.DESTROYED)
-
-        kinds = [e.type for e in svc.audit.for_request(req.id)]
-        for expected in ("request.created", "planned", "approved", "applied", "destroyed"):
-            self.assertIn(expected, kinds)
-
-    def test_deny_rejects(self):
-        svc = SandboxService(DEV)
-        req = svc.submit("dev-sandbox", "x", requester="jdoe", owner="jdoe")
-        svc.decide(req.id, "deny", role="admin", actor="boss")
-        self.assertIs(svc.state(req.id), JobState.REJECTED)
-
-    def test_unknown_role_cannot_approve(self):
-        svc = SandboxService(DEV)
-        req = svc.submit("dev-sandbox", "x", requester="jdoe", owner="jdoe")
-        svc.decide(req.id, "approve", role="intern", actor="intern")
-        self.assertIs(svc.state(req.id), JobState.REJECTED)
-
-    def test_teardown_authz_fail_closed(self):
-        svc = SandboxService(DEV)
-        req = svc.submit("dev-sandbox", "x", requester="jdoe", owner="jdoe")
-        svc.decide(req.id, "approve", role="admin", actor="admin")
-        with self.assertRaises(PermissionError):
-            svc.teardown(req.id, actor="mallory", actor_role="worker")
-
-    def test_failed_apply_lands_in_failed(self):
-        svc = SandboxService(DEV, actuator=_AlwaysFailActuator())
-        req = svc.submit("dev-sandbox", "x", requester="jdoe", owner="jdoe")
-        svc.decide(req.id, "approve", role="admin", actor="admin")
-        self.assertIs(svc.state(req.id), JobState.FAILED)
-        self.assertIn("apply_failed", [e.type for e in svc.audit.for_request(req.id)])
+    def test_dev_profile_falls_back_to_local_default(self):
+        with mock.patch.dict(os.environ, {"FLOWOPS_PROFILE": "dev"}, clear=True):
+            self.assertIn("localhost", load_settings().database_url)
 
 
 if __name__ == "__main__":
