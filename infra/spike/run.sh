@@ -23,7 +23,10 @@ bad()  { printf '  \033[31mFAIL\033[0m %s\n' "$*"; FAIL=$((FAIL+1)); }
 note() { printf '  ·    %s\n' "$*"; }
 
 run_cloud() {
-  local cloud="$1" dir="$HERE/$cloud"
+  # NB: separate `local` statements — `local a=$1 b=$a` expands $a before a is set
+  # (local's args are expanded before assignment), which trips `set -u`.
+  local cloud="$1"
+  local dir="$HERE/$cloud"
   say "CLOUD: $cloud   run_id=$RUN_ID"
   cd "$dir" || { bad "$cloud dir missing"; return; }
   export TF_VAR_run_id="$RUN_ID"
