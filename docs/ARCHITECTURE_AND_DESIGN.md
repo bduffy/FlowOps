@@ -204,10 +204,15 @@ assumes a scoped role via OIDC — no stored static keys.
 - OpenTofu **state lives in the control-plane account**, encrypted, with secrets
   redacted and access isolated.
 
-The first cloud (AWS vs GCP) is decided in a **week-0 spike** that builds the
-apply/destroy/orphan test against both and picks the factory that is demonstrably safe
-and fast (GCP project vending is roughly one API call; AWS account factory is heavier
-OU/SCP/Control Tower ceremony).
+The first cloud was decided by the **week-0 spike** (issue #1, `infra/spike/`): both
+clouds passed the inner loop (provision/destroy/failed-apply/orphan-detect) 4/4, so the
+call rested on vending — and **GCP won**. Project-per-sandbox vending is roughly one API
+call and scales to thousands; the AWS account factory (Organizations/OUs/SCPs/Control
+Tower, ~10-account soft quota) is far heavier and risked becoming the product. **v1 is
+GCP-first** (Workload Identity Federation, no static keys); AWS follows as a second cloud
+via the `Actuator` seam (post-v1). Two spike lessons feed the build: the orphan detector
+must **fail loud** (never report clean when it cannot query), and the production
+reconciler queries via the provider SDK, not a `gcloud` shell-out (CLI auth ≠ ADC).
 
 ### 4.4 The Actuator seam (the only abstraction in v1)
 
