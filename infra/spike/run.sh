@@ -78,11 +78,13 @@ run_cloud() {
   note "removed $bucket from tofu state (now an orphan in the cloud)"
 
   if ./detect_orphans.sh "$RUN_ID" "$proj" >/tmp/spike-$cloud-detect.log 2>&1; then
-    bad "orphan detector found nothing (it should have found $bucket)"
+    bad "orphan detector reported NO orphans (it should have found $bucket)"
+    note "$(tail -1 /tmp/spike-$cloud-detect.log)"
+  elif grep -q "$bucket" /tmp/spike-$cloud-detect.log; then
+    ok "orphan detector found the untracked resource"
   else
-    grep -q "$bucket" /tmp/spike-$cloud-detect.log \
-      && ok "orphan detector found the untracked resource" \
-      || bad "detector ran but did not name the orphan — see /tmp/spike-$cloud-detect.log"
+    bad "orphan detector could not confirm the orphan — reason below"
+    grep -E 'ERROR|WARN|active account|RESULT' /tmp/spike-$cloud-detect.log | sed 's/^/      /' | head -4
   fi
 
   # cleanup the orphan via cloud CLI (tofu no longer tracks it)

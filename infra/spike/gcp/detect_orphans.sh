@@ -24,6 +24,19 @@ echo "== GCP orphan scan for run=${RUN_ID} project=${PROJECT:-<gcloud default>} 
 proj_flag=()
 [ -n "$PROJECT" ] && proj_flag=(--project "$PROJECT")
 
+# 0. FAIL LOUD if we cannot query the cloud. A detector that can't reach the cloud must
+#    NEVER report "no orphans" — that silent false-clean is the exact failure mode the
+#    real teardown reconciler must avoid. gcloud CLI auth is SEPARATE from Terraform's
+#    ADC: `apply` can succeed (ADC) while `gcloud storage` has no active account.
+active="$(gcloud auth list --filter=status:ACTIVE --format='value(account)' 2>/dev/null || true)"
+if [ -z "$active" ]; then
+  echo "ERROR: gcloud CLI has no active account — cannot scan for orphans."
+  echo "  Fix: gcloud auth login"
+  echo "  (NOTE: 'gcloud auth application-default login' / ADC is what OpenTofu uses and"
+  echo "   is SEPARATE — it does not authenticate the gcloud CLI used here.)"
+  exit 4
+fi
+
 # 1. State view.
 in_state="$(tofu state list 2>/dev/null | grep -c 'google_storage_bucket' || true)"
 echo "tofu state: ${in_state} bucket(s) tracked"
