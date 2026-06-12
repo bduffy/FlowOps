@@ -1,0 +1,29 @@
+# FlowOps — local dev stack. `FLOWOPS_PROFILE=dev docker compose up`
+# Runs the full governed-actuation loop with zero cloud credentials (DummyActuator).
+# Postgres is included for when the durable jobs table lands (#5); the scaffold's
+# in-memory store does not require it yet.
+
+services:
+  api:
+    build: .
+    environment:
+      FLOWOPS_PROFILE: ${FLOWOPS_PROFILE:-dev}
+      FLOWOPS_REGION: ${FLOWOPS_REGION:-us-east-1}
+    ports:
+      - "8000:8000"
+    depends_on:
+      - db
+
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: flowops
+      POSTGRES_PASSWORD: flowops
+      POSTGRES_DB: flowops
+    ports:
+      - "5432:5432"
+    volumes:
+      - flowops-db:/var/lib/postgresql/data
+
+volumes:
+  flowops-db:
